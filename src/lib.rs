@@ -18,8 +18,8 @@ use logger::Logger;
 use logger::LOG_ENABLE;
 use logger::LOG_FILE_NAME;
 
-use lsp_types::DidChangeTextDocumentParams;
 use lsp_types::Diagnostic;
+use lsp_types::DidChangeTextDocumentParams;
 use lsp_types::InitializeParams;
 use lsp_types::InitializeResult;
 use lsp_types::InitializedParams;
@@ -141,6 +141,7 @@ struct LspServer {
     dispatcher: Option<thread::JoinHandle<()>>,
     server_data: Arc<Mutex<LspServerData>>,
     exit: Arc<Mutex<bool>>,
+    request_queue: Arc<Mutex<Vec<Request>>>,
 }
 
 impl LspServer {
@@ -173,6 +174,7 @@ impl LspServer {
                 dispatcher: None,
                 server_data: Arc::new(Mutex::new(LspServerData::new())),
                 exit: Arc::new(Mutex::new(false)),
+                request_queue: Arc::new(Mutex::new(Vec::new())),
             };
 
             let mut stdin = c.stdin.take().unwrap();
@@ -189,6 +191,7 @@ impl LspServer {
                 Arc::clone(&server.transport),
                 Arc::clone(&server.exit),
                 Arc::clone(&server.server_data),
+                server.request_queue.clone(),
             ));
             server.status = SERVER_STATUS_STARTING;
 
@@ -206,6 +209,7 @@ impl LspServer {
         transport2: Arc<Mutex<Option<Connection>>>,
         exit2: Arc<Mutex<bool>>,
         server_data2: Arc<Mutex<LspServerData>>,
+        request_queue: Arc<Mutex<Vec<Request>>>,
     ) -> thread::JoinHandle<()> {
         let handle = thread::spawn(move || loop {
             {
@@ -229,6 +233,8 @@ impl LspServer {
                         //     let mut requests = requests2.lock().unwrap();
                         //     requests.push_back(r);
                         // }
+
+                        request_queue.lock().unwrap().push(r);
                     }
                     Message::Response(mut r) => {
                         // Logger::log(&format!("Response {}", &r.content));
@@ -238,16 +244,25 @@ impl LspServer {
                         let request_tick = server_data.request_ticks.get(&id);
                         if (request_tick.is_some()) {
                             let request_tick = request_tick.unwrap().clone();
-                            Logger::log(&format!("Request tick for id {} is {}", &id, &request_tick));
+                            Logger::log(&format!(
+                                "Request tick for id {} is {}",
+                                &id, &request_tick
+                            ));
                             if (request_tick.eq(&server_data.latest_request_tick)) {
                                 r.request_tick = request_tick.clone();
                                 server_data.responses.push_back(r);
                             }
-                            Logger::log(&format!("Latest response id is {}, current response id {}", &server_data.latest_response_id, &id));
+                            Logger::log(&format!(
+                                "Latest response id is {}, current response id {}",
+                                &server_data.latest_response_id, &id
+                            ));
                             if server_data.latest_response_id.lt(&id) {
                                 server_data.latest_response_id = id.clone();
                                 server_data.latest_response_tick = request_tick.clone();
-                                Logger::log(&format!("Change Latest response tick for id {} to {}", &server_data.latest_response_id, &request_tick));
+                                Logger::log(&format!(
+                                    "Change Latest response tick for id {} to {}",
+                                    &server_data.latest_response_id, &request_tick
+                                ));
                             }
 
                             server_data.request_ticks.remove(&id);
@@ -262,7 +277,7 @@ impl LspServer {
                         if r.method.eq("textDocument/publishDiagnostics") {
                             let params =
                                 serde_json::from_value::<PublishDiagnosticsParams>(r.params)
-                                .unwrap();
+                                    .unwrap();
 
                             let uri = params.uri.as_str().to_string();
                             let mut file_info = FileInfo::new(uri.clone());
@@ -699,13 +714,12 @@ fn _request_async(server: &mut LspServer, req: Request) -> bool {
 
     server.update_request_info(id.clone(), request_tick);
 
-    if method == "textDocument/didChange" || method == "textDocument/didClose"{
+    if method == "textDocument/didChange" || method == "textDocument/didClose" {
         let param = serde_json::from_value::<DidChangeTextDocumentParams>(req.params.clone());
         if let Ok(param) = param {
             server.clear_diagnostics(&param.text_document.uri.to_string());
         }
     }
-    
 
     let write_result = server.write(Message::Request(req));
     match write_result {
@@ -845,11 +859,7 @@ fn read_response_exact(
 }
 
 #[defun]
-fn read_notification(
-    env: &Env,
-    root_uri: String,
-    file_type: String,
-) -> Result<Option<String>> {
+fn read_notification(env: &Env, root_uri: String, file_type: String) -> Result<Option<String>> {
     let projects = projects().lock().unwrap();
     if let Some(p) = projects.get(&root_uri) {
         if let Some(server) = p.servers.get(&file_type) {
@@ -872,7 +882,6 @@ fn read_notification(
     Ok(None)
 }
 
-
 #[defun]
 fn read_file_diagnostics(
     env: &Env,
@@ -889,6 +898,32 @@ fn read_file_diagnostics(
 
                 if result.is_ok() {
                     return Ok(Some(result.unwrap()));
+                }
+            }
+        } else {
+            env.message(&format!("No server for {}", &file_type));
+        }
+    } else {
+        env.message(&format!("No project for {} {}", &root_uri, &file_type));
+    }
+
+    Ok(None)
+}
+
+/// This function should allow the server to instruct emacs to do stuff.
+/// One application of this method could be the "workspace/inlayHint/refresh"
+/// request, which is issued by the server and instructs lspce to refresh the
+/// inlay hints.
+#[defun]
+fn poll_server_request(env: &Env, root_uri: String, file_type: String) -> Result<Option<String>> {
+    let projects = projects().lock().unwrap();
+    if let Some(p) = projects.get(&root_uri) {
+        if let Some(server) = p.servers.get(&file_type) {
+            if let Some(req) = server.request_queue.lock().unwrap().pop() {
+                let res = serde_json::to_string(&req);
+
+                if res.is_ok() {
+                    return Ok(Some(res.unwrap()));
                 }
             }
         } else {
@@ -944,4 +979,3 @@ fn read_latest_response_tick(
 
     Ok(None)
 }
-
