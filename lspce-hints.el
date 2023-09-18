@@ -1,12 +1,26 @@
-(require 'lspce)
+;;; lspce-hints.el --- Inlay type information for lspce-mode
 
-;; TODO: Add defgroup
+;; TODO: Check how it lspce checks in which buffers it must act on, because
+;;       this mode is currently buffer local.
+
+(defgroup lspce-hints-mode nil
+  "Language Server Protocol client."
+  :group 'tools
+  :prefix "lspce-hints-")
 
 ;;; Variables:
 
+(defface lspce-hints-type-foreground '((t (:inherit shadow)))
+  "Face used to color type inlay hints."
+  :group 'lspce-hints-mode)
+
+(defface lspce-hints-parameter-foreground '((t :inherit shadow))
+  "Face used to color parameter inlay hints.")
+
 (defcustom lspce-hints-idle-timer-secs 1
   "Update the inlay hints after emacs is idle for N secs."
-  :type 'float)
+  :type 'float
+  :group 'lspce-hints-mode)
 
 (defvar lspce-hints--idle-timer nil
   "The idle timer used to update the inlay hints.")
@@ -23,12 +37,16 @@
   ;; TODO: Add other face for different kinds of inlay hints (e.g. type or parameter)
   "Create an overlay with LABEL at ABSPOS and maybe add PADDING-LEFT and
 PADDING-RIGHT."
-  (let ((overlay (make-overlay abspos abspos nil 'front-advance 'end-advance)))
+  (let ((overlay (make-overlay abspos abspos nil 'front-advance 'end-advance))
+	(face (cond ((eq kind 1) 'lspce-hints-type-foreground)
+		    ((eq kind 2) 'lspce-hints-parameter-foreground)
+		    (t (error "Server returned %s, which is not supported."
+			      kind)))))
     (overlay-put overlay 'lspce-inlay-hint t)
     (overlay-put overlay 'before-string
 		 (format "%s%s%s"
 			 (if padding-left " " "")
- 			 (propertize label 'font-lock-face 'shadow)
+ 			 (propertize label 'font-lock-face face)
 			 (if padding-right " " "")))))
 
 (defun lspce-hints--get-label-string (label)
@@ -109,19 +127,21 @@ the server can understand."
 				  kind paddingLeft paddingRight)))))
 
 (define-minor-mode lspce-hints-mode
-  ""
+  "When lspce-hints-mode is enabled, emacs displays type information
+in the current buffer. This mode requires lspce-mode to be enabled."
   :lighter nil
   :global nil
   ;; TODO: Check if lspce-mode is enabled.
   (if lspce-hints-mode
-      (progn
-	(lspce-hints--recalculate-inlays)
-	(setq lspce-hints--idle-timer
-	      (run-with-idle-timer lspce-hints-idle-timer-secs t
-				   ;; TODO: optimize this:
-				   (lambda () (when lspce-hints-mode
-						(lspce-hints--recalculate-inlays))))))
-    (progn (cancel-timer lspce-hints--idle-timer)
+      (progn (lspce-hints--recalculate-inlays)
+	     (setq lspce-hints--idle-timer
+		   (run-with-idle-timer
+		    lspce-hints-idle-timer-secs t
+		    ;; TODO: optimize this:
+		    (lambda () (when lspce-hints-mode
+				 (lspce-hints--recalculate-inlays))))))
+    (progn (when lspce-hints--idle-timer
+	     (cancel-timer lspce-hints--idle-timer))
 	   (lspce-hints--clear-overlays))))
 
 (provide 'lspce-hints)
