@@ -34,7 +34,6 @@
     (remove-overlays (point-min) (point-max) 'lspce-inlay-hint t)))
 
 (defun lspce-hints--add-overlay (abspos label kind padding-left padding-right)
-  ;; TODO: Add other face for different kinds of inlay hints (e.g. type or parameter)
   "Create an overlay with LABEL at ABSPOS and maybe add PADDING-LEFT and
 PADDING-RIGHT."
   (let ((overlay (make-overlay abspos abspos nil 'front-advance 'end-advance))
@@ -74,14 +73,14 @@ returned as a cons."
 
 (defun lspce-hints--make-inlayHintParams ()
   "Generate the params for the server."
-  (let* ((params (make-hash-table))
-	 (region (lspce--region-bounds))
-	 (beg (nth 0 region))
-	 (end (nth 1 region)))
+  (let* ((params (make-hash-table)))
     (puthash :textDocument (lspce--textDocumentIdenfitier
 			    (lspce--path-to-uri buffer-file-name)) params)
-    (puthash :range (lspce-hints--make-range) params)
+    (puthash :range (lspce-hints--make-range)
+	     params)
     params))
+
+;; NOTE: maybe use lspce--make-postion. Otherwise use lspce--postition
 
 (defun lspce-hints--make-range-start ()
   "Get the start of the visisble part of the buffer. It returns it in a format
@@ -126,6 +125,11 @@ the server can understand."
 	(lspce-hints--add-overlay abspos (lspce-hints--get-label-string label)
 				  kind paddingLeft paddingRight)))))
 
+(defun lspce-hints--deactivate-mode ()
+  "Function called when buffer is killed."
+  (when lspce-hints-mode
+    (lspce-hints-mode nil)))
+
 (define-minor-mode lspce-hints-mode
   "When lspce-hints-mode is enabled, emacs displays type information
 in the current buffer. This mode requires lspce-mode to be enabled."
@@ -133,15 +137,20 @@ in the current buffer. This mode requires lspce-mode to be enabled."
   :global nil
   ;; TODO: Check if lspce-mode is enabled.
   (if lspce-hints-mode
-      (progn (lspce-hints--recalculate-inlays)
-	     (setq lspce-hints--idle-timer
-		   (run-with-idle-timer
-		    lspce-hints-idle-timer-secs t
-		    ;; TODO: optimize this:
-		    (lambda () (when lspce-hints-mode
-				 (lspce-hints--recalculate-inlays))))))
-    (progn (when lspce-hints--idle-timer
-	     (cancel-timer lspce-hints--idle-timer))
-	   (lspce-hints--clear-overlays))))
+      (progn
+	(lspce-hints--recalculate-inlays)
+	(setq lspce-hints--idle-timer
+	      (run-with-idle-timer
+	       lspce-hints-idle-timer-secs t
+	       ;; TODO: optimize this:
+	       (lambda () (when lspce-hints-mode
+			    (lspce-hints--recalculate-inlays)))))
+	;; Overlays and timer will get handled when mode is deactivated.
+	(add-hook 'kill-buffer-hook 'lspce-hints--deactivate-mode nil t))
+    (progn
+      (when lspce-hints--idle-timer
+	(cancel-timer lspce-hints--idle-timer))
+      (lspce-hints--clear-overlays)
+      (remove-hook 'kill-buffer-hook 'lspce-hints--kill-buffer-function t))))
 
 (provide 'lspce-hints)
