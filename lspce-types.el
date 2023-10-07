@@ -125,7 +125,8 @@
                                        :versionSupport :json-false
                                        :tagSupport (list :valueSet [1 2]))
                   :callHierarchy (list
-                                  :dynamicRegistration :json-false))
+                                  :dynamicRegistration :json-false)
+                  :inlayHint (list :dynamicRegistration :json-false))
    :experimental lspce--{})
   )
 

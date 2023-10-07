@@ -22,6 +22,7 @@
 (require 'lspce-langs)
 (require 'lspce-structs)
 (require 'lspce-snippet)
+(require 'lspce-hints)
 
 ;;; User tweakable stuff
 (defgroup lspce nil
